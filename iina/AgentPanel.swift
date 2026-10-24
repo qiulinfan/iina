@@ -80,8 +80,6 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   private var whenReady: [(Error?) -> Void] = []
   private var isBusy = false { didSet { view.composer.setBusy(isBusy) } }
 
-  /// The moment captured when the user started asking; consumed by the next prompt.
-  private var moment: AgentMoment?
   /// Position whose frame the agent has already seen, so follow-ups don't resend it.
   private var lastSentFramePosition: Double?
 
@@ -101,10 +99,6 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     view.composer.textView.onEscape = { [unowned self] in mainWindow.window?.makeFirstResponder(nil) }
     view.composer.sendButton.target = self
     view.composer.sendButton.action = #selector(sendOrStop)
-    view.composer.momentButton.target = self
-    view.composer.momentButton.action = #selector(seekToMoment)
-    view.composer.removeFrameButton.target = self
-    view.composer.removeFrameButton.action = #selector(dropFrame)
     view.composer.modelPopup.target = self
     view.composer.modelPopup.action = #selector(modelSelected)
     view.header.newThreadButton.target = self
@@ -172,27 +166,18 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
 
   // MARK: Asking
 
-  /// Pause, remember where we are and put the cursor in the composer.
+  /// Put the cursor in the composer; the video keeps playing.
   @objc func askAboutCurrentMoment() {
     setVisible(true)
-    beginQuestion()
-    view.window?.makeFirstResponder(view.composer.textView)
-  }
-
-  private func beginQuestion() {
-    if moment == nil {
-      if player.info.state == .playing { player.pause() }
-      moment = captureMoment()
-      view.composer.show(moment: moment)
-    }
     ensureStarted { _ in }
+    view.window?.makeFirstResponder(view.composer.textView)
   }
 
   func textDidChange(_ notification: Notification) {
     view.composer.textDidChange()
-    // Typing a question pauses the video where the user got lost.
-    if !view.composer.textView.string.isEmpty && moment == nil {
-      beginQuestion()
+    // Start omp while the question is being typed so it's ready on send.
+    if !view.composer.textView.string.isEmpty {
+      ensureStarted { _ in }
     }
   }
 
@@ -207,15 +192,14 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   private func submit() {
     let question = view.composer.textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !question.isEmpty, !isBusy else { return }
-    var moment = self.moment ?? captureMoment()
-    self.moment = nil
+    // The question is pinned to what is on screen when it is sent, even while the video plays.
+    var moment = captureMoment(withFrame: view.composer.attachesFrame)
     if let position = moment?.position, let last = lastSentFramePosition, abs(position - last) < 0.05 {
       moment?.frame = nil
     }
 
     view.composer.textView.string = ""
     view.composer.textDidChange()
-    view.composer.show(moment: nil)
     view.transcript.append(UserMessageView(question, moment: moment, target: self, action: #selector(seekToMessageMoment(_:))))
     view.window?.makeFirstResponder(nil)
 
@@ -266,12 +250,10 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     clientState = .idle
     whenReady.removeAll()
     isBusy = false
-    moment = nil
     lastSentFramePosition = nil
     currentReply = nil
     toolViews.removeAll()
     thinkingView = nil
-    view.composer.show(moment: nil)
     view.header.setThreadTitle(nil)
     view.composer.setCost(nil)
     view.transcript.clear()
@@ -282,19 +264,9 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     newThread()
   }
 
-  @objc private func seekToMoment() {
-    guard let moment else { return }
-    player.seek(absoluteSecond: moment.position)
-  }
-
   @objc private func seekToMessageMoment(_ sender: NSButton) {
     guard let position = (sender as? MomentButton)?.position else { return }
     player.seek(absoluteSecond: position)
-  }
-
-  @objc private func dropFrame() {
-    moment?.frame = nil
-    view.composer.show(moment: moment)
   }
 
   @objc private func modelSelected() {
@@ -412,7 +384,7 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
 
   // MARK: Context
 
-  private func captureMoment() -> AgentMoment? {
+  private func captureMoment(withFrame: Bool) -> AgentMoment? {
     guard player.info.state.active, let mpv = player.mpv else { return nil }
     let position = mpv.getDouble(MPVProperty.timePos)
     let url = player.info.currentURL
@@ -428,7 +400,7 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
       chapter: chapter,
       subtitles: Array(subtitles),
       subtitleFiles: player.info.subTracks.compactMap { $0.isExternal ? $0.externalFilename : nil },
-      frame: captureFrame()
+      frame: withFrame ? captureFrame() : nil
     )
   }
 
@@ -453,7 +425,7 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   }
 
   private func contextText(for moment: AgentMoment) -> String {
-    var lines = ["[IINA] The user is watching a video and paused to ask about this moment. Answer concisely, in the language of the question."]
+    var lines = ["[IINA] The user is watching a video and asks about the moment below; playback may have continued since. Answer concisely, in the language of the question."]
     lines.append("Video: \(moment.title)" + (moment.path.map { " — \($0)" } ?? ""))
     lines.append("Position: \(timeString(moment.position))" + (moment.duration.map { " / \(timeString($0))" } ?? ""))
     if let chapter = moment.chapter {
@@ -633,8 +605,9 @@ class AgentHeaderView: NSView {
 class TranscriptView: NSScrollView {
   private let stack = NSStackView()
   private let emptyLabel = NSTextField(wrappingLabelWithString:
-    "Stop where you got lost and ask.\n\n⌘⇧A pauses and focuses the box below; typing there pauses too. "
-    + "Each question carries the position, recent subtitles and the current frame.")
+    "Ask about what you're watching.\n\n⌘⇧A focuses the box below and the video keeps playing. "
+    + "A question is pinned to the moment you press Return: its position, the subtitles leading up to it "
+    + "and the frame on screen.")
 
   override init(frame: NSRect) {
     super.init(frame: frame)
@@ -704,10 +677,9 @@ class ComposerView: NSView {
   private let textScroll = NSScrollView()
   private var textHeight: NSLayoutConstraint!
 
-  private let momentRow = NSStackView()
-  let momentButton = MomentButton()
-  private let frameView = NSImageView()
-  let removeFrameButton = AgentHeaderView.iconButton("xmark", tooltip: "Don't Send the Frame")
+  private let frameToggle = AgentHeaderView.iconButton("photo", tooltip: "")
+  /// Whether questions carry the frame on screen.
+  private(set) var attachesFrame = true
 
   let modelPopup = NSPopUpButton()
   private let costLabel = NSTextField(labelWithString: "")
@@ -743,14 +715,9 @@ class ComposerView: NSView {
     textScroll.autohidesScrollers = true
     textScroll.scrollerStyle = .overlay
 
-    frameView.imageScaling = .scaleProportionallyUpOrDown
-    frameView.wantsLayer = true
-    frameView.layer?.cornerRadius = 3
-    frameView.layer?.masksToBounds = true
-    momentRow.setViews([momentButton, frameView, removeFrameButton, NSView()], in: .leading)
-    momentRow.orientation = .horizontal
-    momentRow.spacing = 6
-    momentRow.isHidden = true
+    frameToggle.target = self
+    frameToggle.action = #selector(toggleFrame)
+    updateFrameToggle()
 
     modelPopup.isBordered = false
     modelPopup.font = Style.font(11)
@@ -767,11 +734,11 @@ class ComposerView: NSView {
     sendButton.widthAnchor.constraint(equalToConstant: 22).isActive = true
     setBusy(false)
 
-    let footer = NSStackView(views: [modelPopup, NSView(), costLabel, sendButton])
+    let footer = NSStackView(views: [modelPopup, NSView(), costLabel, frameToggle, sendButton])
     footer.orientation = .horizontal
     footer.spacing = 6
 
-    let stack = NSStackView(views: [momentRow, textScroll, footer])
+    let stack = NSStackView(views: [textScroll, footer])
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 6
@@ -786,9 +753,6 @@ class ComposerView: NSView {
       stack.bottomAnchor.constraint(equalTo: bottomAnchor),
       textScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -16),
       footer.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -16),
-      momentRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -16),
-      frameView.heightAnchor.constraint(equalToConstant: 34),
-      frameView.widthAnchor.constraint(lessThanOrEqualToConstant: 80),
       textHeight,
     ])
   }
@@ -807,18 +771,14 @@ class ComposerView: NSView {
     textView.needsDisplay = true
   }
 
-  func show(moment: AgentMoment?) {
-    guard let moment else {
-      momentRow.isHidden = true
-      return
-    }
-    momentButton.position = moment.position
-    momentButton.setLabel("⏸ \(timeString(moment.position))")
-    let frame = moment.frame.flatMap(NSImage.init(data:))
-    frameView.image = frame
-    frameView.isHidden = frame == nil
-    removeFrameButton.isHidden = frame == nil
-    momentRow.isHidden = false
+  @objc private func toggleFrame() {
+    attachesFrame.toggle()
+    updateFrameToggle()
+  }
+
+  private func updateFrameToggle() {
+    frameToggle.contentTintColor = attachesFrame ? Style.accent : Style.placeholder
+    frameToggle.toolTip = attachesFrame ? "Questions carry the frame on screen (click to stop)" : "Frames are not sent (click to send them)"
   }
 
   func setBusy(_ busy: Bool) {
@@ -1078,16 +1038,24 @@ class PermissionView: NSView {
     layer?.borderWidth = 1
     layer?.borderColor = Style.border.cgColor
 
-    for (index, option) in options.enumerated() {
+    let optionButtons = options.enumerated().map { index, option in
       let button = NSButton(title: option.name, target: self, action: #selector(choose(_:)))
       button.controlSize = .small
       button.font = Style.font(11)
       button.tag = index
       button.identifier = NSUserInterfaceItemIdentifier(option.id)
-      buttons.addArrangedSubview(button)
+      return button
     }
-    buttons.orientation = .horizontal
-    buttons.spacing = 6
+    // Two per row, so four options fit the panel's width.
+    for start in stride(from: 0, to: optionButtons.count, by: 2) {
+      let row = NSStackView(views: Array(optionButtons[start..<min(start + 2, optionButtons.count)]))
+      row.orientation = .horizontal
+      row.spacing = 6
+      buttons.addArrangedSubview(row)
+    }
+    buttons.orientation = .vertical
+    buttons.alignment = .leading
+    buttons.spacing = 4
 
     let label = wrappingLabel(title, color: Style.text, size: 12)
     let stack = NSStackView(views: [label, buttons])

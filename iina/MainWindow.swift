@@ -26,6 +26,13 @@ class MainWindow: CommonWindow {
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    /// Menu items carry mpv's single-key bindings (`f`, `space`, ...) as key equivalents. While text
+    /// is being typed, keys without Command or Control are text, not player commands.
+    if let textView = firstResponder as? NSTextView, textView.isEditable,
+       event.modifierFlags.intersection([.command, .control]).isEmpty {
+      textView.keyDown(with: event)
+      return true
+    }
     /// AppKit by default will prioritize menu item key equivalents over arrow key navigation
     /// (although for some reason it is the opposite for `ESC`, `TAB`, `ENTER` or `RETURN`).
     /// Need to add an explicit check here for arrow keys to ensure that they always work when desired.

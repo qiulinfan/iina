@@ -2037,7 +2037,10 @@ class MainWindowController: PlayerWindowController {
   }
 
   func windowDidBecomeKey(_ notification: Notification) {
-    window!.makeFirstResponder(window!)
+    // Keep a question being typed in the agent panel focused when coming back to the window.
+    if window!.firstResponder !== agentPanel.view.composer.textView {
+      window!.makeFirstResponder(window!)
+    }
     if Preference.bool(for: .pauseWhenInactive) && isPausedDueToInactive {
       player.resume()
       isPausedDueToInactive = false

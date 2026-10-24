@@ -32,6 +32,8 @@ class AgentClient {
   var onExit: ((String) -> Void)?
 
   private(set) var sessionId: String?
+  /// Whether this session got a prompt; a session that never did is deleted when it ends.
+  private var prompted = false
   private var process: Process?
   private var input: FileHandle?
   private var buffer = Data()
@@ -116,6 +118,7 @@ class AgentClient {
         switch result {
         case .success(let response):
           self.sessionId = response["sessionId"] as? String
+          self.prompted = false
           if let options = response["configOptions"] as? [JSON] { self.onConfigOptions?(options) }
           completion(self.sessionId == nil ? AgentError(message: "omp returned no session id") : nil)
         case .failure(let error):
@@ -125,21 +128,52 @@ class AgentClient {
     }
   }
 
+  /// Cleanups of unused sessions still waiting for their omp to exit.
+  private static let cleanups = DispatchGroup()
+
+  /// Called before IINA quits, so the files of unused sessions are gone when it exits.
+  static func waitForCleanups() {
+    _ = cleanups.wait(timeout: .now() + 3)
+  }
+
   func stop() {
     pending.removeAll()
+    let unusedSession = prompted ? nil : sessionId
     sessionId = nil
     guard let process else { return }
     self.process = nil
-    process.terminationHandler = nil
     try? input?.close()
     input = nil
-    if process.isRunning { process.terminate() }
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
+    if process.isRunning { process.terminate() } else { exited.signal() }
+    guard let unusedSession else { return }
+    // Delete only after omp has exited, so it can't write the file again.
+    DispatchQueue.global(qos: .utility).async(group: AgentClient.cleanups) {
+      if exited.wait(timeout: .now() + 3) == .success { AgentClient.deleteUnusedSession(unusedSession) }
+    }
+  }
+
+  /// Remove the file of a session that never got a prompt, with the lock omp keeps beside it
+  /// (`<time>_<id>.jsonl` and `.<time>_<id>.jsonl.lock.os`). A file holding a message is kept.
+  private static func deleteUnusedSession(_ id: String) {
+    let fileManager = FileManager.default
+    guard let names = try? fileManager.contentsOfDirectory(atPath: sessionDir) else { return }
+    let dir = URL(fileURLWithPath: sessionDir)
+    guard let file = names.first(where: { $0.hasSuffix("_\(id).jsonl") && !$0.hasPrefix(".") }),
+          let content = try? String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8),
+          !content.contains(#""type":"message""#) else { return }
+    for name in [file, ".\(file).lock.os"] {
+      try? fileManager.removeItem(at: dir.appendingPathComponent(name))
+    }
+    Logger.log("Removed unused omp session \(id)", subsystem: subsystem)
   }
 
   private func didExit(status: Int32) {
     guard process != nil else { return }
     process = nil
     input = nil
+    if let sessionId, !prompted { AgentClient.deleteUnusedSession(sessionId) }
     sessionId = nil
     let reason = stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
     let message = "omp exited (\(status))" + (reason.isEmpty ? "" : ": \(reason.split(separator: "\n").last ?? "")")
@@ -155,6 +189,7 @@ class AgentClient {
   /// Send a prompt; `completion` receives the stop reason once the turn ends.
   func prompt(_ blocks: [JSON], completion: @escaping (Result<String, Error>) -> Void) {
     guard let sessionId else { completion(.failure(AgentError(message: "No omp session"))); return }
+    prompted = true
     request("session/prompt", ["sessionId": sessionId, "prompt": blocks]) { result in
       completion(result.map { $0["stopReason"] as? String ?? "end_turn" })
     }

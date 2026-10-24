@@ -115,6 +115,11 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     // Start omp as soon as there is something to ask about, so the model and thinking menus are
     // filled before the first question. Opening a session doesn't call the model.
     player.observe(.iinaFileLoaded) { [unowned self] _ in warmUp() }
+    _ = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                           queue: .main) { [weak self] _ in
+      self?.client.stop()
+      AgentClient.waitForCleanups()
+    }
 
     client.onExit = { [unowned self] message in
       clientState = .idle

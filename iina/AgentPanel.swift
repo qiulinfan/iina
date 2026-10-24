@@ -88,6 +88,7 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   private var toolViews: [String: ToolCallView] = [:]
   private var thinkingView: NSView?
   private var modelOptionId: String?
+  private var thinkingOptionId: String?
 
   init(mainWindow: MainWindowController) {
     self.mainWindow = mainWindow
@@ -99,8 +100,10 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     view.composer.textView.onEscape = { [unowned self] in mainWindow.window?.makeFirstResponder(nil) }
     view.composer.sendButton.target = self
     view.composer.sendButton.action = #selector(sendOrStop)
-    view.composer.modelPopup.target = self
-    view.composer.modelPopup.action = #selector(modelSelected)
+    for popup in [view.composer.modelPopup, view.composer.thinkingPopup] {
+      popup.target = self
+      popup.action = #selector(configOptionSelected(_:))
+    }
     view.header.newThreadButton.target = self
     view.header.newThreadButton.action = #selector(newThread)
     view.header.hideButton.target = self
@@ -269,9 +272,10 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     player.seek(absoluteSecond: position)
   }
 
-  @objc private func modelSelected() {
-    guard let modelOptionId, let value = view.composer.modelPopup.selectedItem?.representedObject as? String else { return }
-    client.setConfigOption(modelOptionId, value: value)
+  @objc private func configOptionSelected(_ sender: NSPopUpButton) {
+    let id = sender === view.composer.modelPopup ? modelOptionId : thinkingOptionId
+    guard let id, let value = sender.selectedItem?.representedObject as? String else { return }
+    client.setConfigOption(id, value: value)
   }
 
   // MARK: omp session
@@ -341,23 +345,32 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     }
   }
 
+  /// omp reports these again when the model changes, since each model has its own thinking levels.
   private func updateConfigOptions(_ options: [AgentClient.JSON]) {
-    guard let model = options.first(where: { $0["category"] as? String == "model" }),
-          let id = model["id"] as? String,
-          let choices = model["options"] as? [AgentClient.JSON] else { return }
-    modelOptionId = id
-    let current = model["currentValue"] as? String
-    let popup = view.composer.modelPopup
+    modelOptionId = fill(view.composer.modelPopup, from: options, category: "model") ?? modelOptionId
+    thinkingOptionId = fill(view.composer.thinkingPopup, from: options, category: "thought_level",
+                            symbol: "brain") ?? thinkingOptionId
+  }
+
+  /// Fill a footer popup from the session's select option of `category` and return the option's id.
+  private func fill(_ popup: NSPopUpButton, from options: [AgentClient.JSON], category: String, symbol: String? = nil) -> String? {
+    guard let option = options.first(where: { $0["category"] as? String == category }),
+          let id = option["id"] as? String,
+          let choices = option["options"] as? [AgentClient.JSON] else { return nil }
+    let current = option["currentValue"] as? String
     popup.removeAllItems()
     for choice in choices {
       guard let value = choice["value"] as? String else { continue }
       let item = NSMenuItem(title: choice["name"] as? String ?? value, action: nil, keyEquivalent: "")
       item.representedObject = value
       item.toolTip = choice["description"] as? String
+      item.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: option["name"] as? String) }
       popup.menu?.addItem(item)
       if value == current { popup.select(item) }
     }
+    popup.toolTip = option["name"] as? String
     popup.isHidden = false
+    return id
   }
 
   private func askPermission(_ params: AgentClient.JSON, reply: @escaping (String?) -> Void) {
@@ -682,6 +695,7 @@ class ComposerView: NSView {
   private(set) var attachesFrame = true
 
   let modelPopup = NSPopUpButton()
+  let thinkingPopup = NSPopUpButton()
   private let costLabel = NSTextField(labelWithString: "")
   let sendButton = NSButton()
 
@@ -719,11 +733,13 @@ class ComposerView: NSView {
     frameToggle.action = #selector(toggleFrame)
     updateFrameToggle()
 
-    modelPopup.isBordered = false
-    modelPopup.font = Style.font(11)
-    modelPopup.controlSize = .small
-    modelPopup.isHidden = true
-    (modelPopup.cell as? NSPopUpButtonCell)?.arrowPosition = .arrowAtBottom
+    for popup in [modelPopup, thinkingPopup] {
+      popup.isBordered = false
+      popup.font = Style.font(11)
+      popup.controlSize = .small
+      popup.isHidden = true
+      (popup.cell as? NSPopUpButtonCell)?.arrowPosition = .arrowAtBottom
+    }
     modelPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     costLabel.font = Style.font(11)
     costLabel.textColor = Style.placeholder
@@ -734,7 +750,7 @@ class ComposerView: NSView {
     sendButton.widthAnchor.constraint(equalToConstant: 22).isActive = true
     setBusy(false)
 
-    let footer = NSStackView(views: [modelPopup, NSView(), costLabel, frameToggle, sendButton])
+    let footer = NSStackView(views: [modelPopup, thinkingPopup, NSView(), costLabel, frameToggle, sendButton])
     footer.orientation = .horizontal
     footer.spacing = 6
 

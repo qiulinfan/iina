@@ -112,6 +112,10 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     client.onUpdate = { [unowned self] in handleUpdate($0) }
     client.onConfigOptions = { [unowned self] in updateConfigOptions($0) }
     client.onPermissionRequest = { [unowned self] in askPermission($0, reply: $1) }
+    // Start omp as soon as there is something to ask about, so the model and thinking menus are
+    // filled before the first question. Opening a session doesn't call the model.
+    player.observe(.iinaFileLoaded) { [unowned self] _ in warmUp() }
+
     client.onExit = { [unowned self] message in
       clientState = .idle
       if isBusy { isBusy = false }
@@ -147,6 +151,12 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
       view.window?.makeFirstResponder(nil)
     }
     mainWindow.agentPanelDidChangeVisibility()
+    if visible { warmUp() }
+  }
+
+  private func warmUp() {
+    guard isVisible, player.info.state.active else { return }
+    ensureStarted { _ in }
   }
 
   func resize(to newWidth: CGFloat) {
@@ -249,6 +259,12 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   }
 
   @objc private func newThread() {
+    reset()
+    warmUp()
+  }
+
+  /// End the omp process and clear the thread; also called when the window closes.
+  func reset() {
     client.stop()
     clientState = .idle
     whenReady.removeAll()
@@ -260,11 +276,9 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     view.header.setThreadTitle(nil)
     view.composer.setCost(nil)
     view.transcript.clear()
-  }
-
-  /// Called when the window closes: end the omp process and start over next time.
-  func reset() {
-    newThread()
+    // The next session reports its own options.
+    view.composer.modelPopup.isHidden = true
+    view.composer.thinkingPopup.isHidden = true
   }
 
   @objc private func seekToMessageMoment(_ sender: NSButton) {

@@ -271,6 +271,17 @@ class MenuController: NSObject, NSMenuDelegate {
     playlistLoop.action = #selector(MainMenuActionHandler.menuPlaylistLoop(_:))
     playlistPanel.action = #selector(MainWindowController.menuShowPlaylistPanel(_:))
     chapterPanel.action = #selector(MainWindowController.menuShowChaptersPanel(_:))
+    if let menu = chapterPanel.menu {
+      let askAgent = NSMenuItem(title: "Ask Agent About This Moment",
+                                action: #selector(MainWindowController.menuAskAgent(_:)), keyEquivalent: "a")
+      askAgent.keyEquivalentModifierMask = [.command, .shift]
+      let agentPanel = NSMenuItem(title: "Show/Hide Agent Panel",
+                                  action: #selector(MainWindowController.menuToggleAgentPanel(_:)), keyEquivalent: "a")
+      agentPanel.keyEquivalentModifierMask = [.command, .option]
+      let index = menu.index(of: chapterPanel) + 1
+      menu.insertItem(agentPanel, at: index)
+      menu.insertItem(askAgent, at: index)
+    }
 
     nextMedia.action = #selector(MainMenuActionHandler.menuNextMedia(_:))
     previousMedia.action = #selector(MainMenuActionHandler.menuPreviousMedia(_:))

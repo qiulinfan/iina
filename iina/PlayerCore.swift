@@ -550,6 +550,7 @@ class PlayerCore: NSObject {
     info.videoHeight = nil
     info.videoPosition = nil
     info.videoTracks = []
+    info.recentSubtitles = []
     info.videoWidth = nil
     if isNetwork {
       AppDelegate.shared.openURLWindow.showLoadingScreen(playerCore: self)
@@ -2383,6 +2384,15 @@ class PlayerCore: NSObject {
         log("Processing pending open")
         open(pendingUrl, shouldAutoLoad: pendingAutoLoad)
       }
+    }
+  }
+
+  func subtitleTextChanged(_ text: String, at time: Double) {
+    let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !line.isEmpty, info.recentSubtitles.last?.text != line else { return }
+    info.recentSubtitles.append((time, line))
+    if info.recentSubtitles.count > 300 {
+      info.recentSubtitles.removeFirst(info.recentSubtitles.count - 300)
     }
   }
 

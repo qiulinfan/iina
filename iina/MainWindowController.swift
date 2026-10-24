@@ -53,6 +53,7 @@ class MainWindowController: PlayerWindowController {
 
   /// Owns the sidebar panels, view controllers, and show/hide/resize logic.
   lazy var sidebars = SidebarController(mainWindow: self)
+  lazy var agentPanel = AgentPanelController(mainWindow: self)
 
   private lazy var magnificationGestureRecognizer: NSMagnificationGestureRecognizer = {
     return NSMagnificationGestureRecognizer(target: self, action: #selector(MainWindowController.handleMagnifyGesture(recognizer:)))
@@ -423,7 +424,7 @@ class MainWindowController: PlayerWindowController {
   private var videoContainerConstraints: [NSLayoutConstraint.Attribute: NSLayoutConstraint] = [:]
 
   override var mouseActionDisabledViews: [NSView?] {
-    sidebars.mouseActionDisabledViews + [currentControlBar, titleBarView]
+    sidebars.mouseActionDisabledViews + [currentControlBar, titleBarView, agentPanel.view]
   }
 
   // MARK: - PIP
@@ -504,7 +505,9 @@ class MainWindowController: PlayerWindowController {
     cv.addSubview(bufferIndicatorView)
     titleBarView = Titlebar(mainWindow: self)
     cv.addSubview(titleBarView)
+    agentPanel.install(in: cv)
     sidebars.installSubviews(in: cv)
+    window.minSize = minWindowSize
 
     // thumbnail peek view
     thumbnailPeekView = ThumbnailPeekView()
@@ -795,6 +798,8 @@ class MainWindowController: PlayerWindowController {
     // rather disturbing this works as a workaround, but it does.
     window.title = "Window"
 
+    sidebars.refreshTrailingInset()
+
     // As there have been issues in this area, log details about the screen selection process.
     NSScreen.logAll(subsystem: subsystem)
     NSScreen.log("Window is on screen", window.screen, details: false, subsystem: subsystem)
@@ -872,8 +877,10 @@ class MainWindowController: PlayerWindowController {
     layoutSides.forEach { videoContainerConstraints[$0].flatMap(cv.removeConstraint) }
     if Preference.bool(for: .edgeToEdgeVideo) {
       layoutSides.forEach { attr in
+        // The video always ends where the agent panel begins.
+        let (item, itemAttr): (NSView, NSLayoutConstraint.Attribute) = attr == .trailing ? (agentPanel.view, .leading) : (cv, attr)
         videoContainerConstraints[attr] = NSLayoutConstraint(item: videoViewContainer!, attribute: attr, relatedBy: .equal,
-                                                        toItem: cv, attribute: attr, multiplier: 1, constant: 0)
+                                                        toItem: item, attribute: itemAttr, multiplier: 1, constant: 0)
       }
     } else {
       let docked = Preference.bool(for: .dockedControlBarAndTitlebar)
@@ -1302,7 +1309,7 @@ class MainWindowController: PlayerWindowController {
       showUI()
     }
     // check whether mouse is in osc
-    if event.inAnyOf([currentControlBar, titleBarView]) {
+    if event.inAnyOf([currentControlBar, titleBarView, agentPanel.view]) {
       destroyTimer()
     } else {
       updateTimer()
@@ -1438,6 +1445,7 @@ class MainWindowController: PlayerWindowController {
       cameraHousingWindow = nil
     }
     player.stop()
+    agentPanel.reset()
     // stop tracking mouse event
     guard let w = self.window, let cv = w.contentView else { return }
     cv.trackingAreas.forEach(cv.removeTrackingArea)
@@ -1923,10 +1931,31 @@ class MainWindowController: PlayerWindowController {
     if !window.inLiveResize {
       liveText.clearAnalysis()
     }
+    let inset = agentPanel.visibleWidth
+    if inset > 0 {
+      return frameSizeKeepingVideoAspect(frameSize, inset: inset)
+    }
     if frameSize.height <= AppData.mainWindowMinSize.height || frameSize.width <= AppData.mainWindowMinSize.width {
       return currentWindowAspectRatio.grow(toSize: AppData.mainWindowMinSize)
     }
     return frameSize
+  }
+
+  /// With the agent panel shown, the window's aspect ratio can't be locked by AppKit; keep the video
+  /// area (window minus panel) at the video's aspect ratio instead.
+  private func frameSizeKeepingVideoAspect(_ frameSize: NSSize, inset: CGFloat) -> NSSize {
+    let minSize = minWindowSize
+    var size = NSSize(width: max(frameSize.width, minSize.width), height: max(frameSize.height, minSize.height))
+    guard let window, !Preference.unlockWindowAspectRatio, !Preference.isDocked, fsState == .windowed,
+          let w = player.info.displayWidth, let h = player.info.displayHeight, w > 0, h > 0 else { return size }
+    let ratio = CGFloat(w) / CGFloat(h)
+    let current = window.frame.size
+    if abs(size.width - current.width) >= abs(size.height - current.height) {
+      size.height = max((size.width - inset) / ratio, minSize.height)
+    } else {
+      size.width = max(size.height * ratio + inset, minSize.width)
+    }
+    return size
   }
 
   func windowDidResize(_ notification: Notification) {
@@ -2334,16 +2363,49 @@ class MainWindowController: PlayerWindowController {
     return topOfThumbnail <= windowContentHeight
   }
 
+  // MARK: - UI: Agent panel
+
+  var minWindowSize: NSSize {
+    NSSize(width: AppData.mainWindowMinSize.width + agentPanel.visibleWidth, height: AppData.mainWindowMinSize.height)
+  }
+
+  /// Grow or shrink the window by the panel's width so the video keeps its size.
+  func agentPanelDidChangeVisibility() {
+    guard loaded, let window else { return }
+    sidebars.refreshTrailingInset()
+    window.minSize = minWindowSize
+    let (videoWidth, videoHeight) = player.videoSizeForDisplay
+    setWindowAspectRatio(NSSize(width: videoWidth, height: videoHeight))
+    if fsState == .windowed {
+      var frame = window.frame
+      frame.size.width += agentPanel.isVisible ? agentPanel.width : -agentPanel.width
+      if let screenFrame = window.screen?.visibleFrame {
+        frame = frame.constrain(in: screenFrame)
+      }
+      window.setFrame(frame, display: true)
+      updateWindowParametersForMPV()
+    }
+    setWindowToolbar()
+  }
+
+  func agentPanelDidResize() {
+    guard loaded, let window else { return }
+    sidebars.refreshTrailingInset()
+    window.minSize = minWindowSize
+    updateWindowParametersForMPV()
+  }
+
   // MARK: - UI: Window size / aspect
 
   private var currentWindowAspectRatio: NSSize {
     guard let window else { return .zero }
-    return Preference.unlockWindowAspectRatio ? window.frame.size : window.aspectRatio
+    return Preference.unlockWindowAspectRatio || agentPanel.isVisible ? window.frame.size : window.aspectRatio
   }
 
   private func setWindowAspectRatio(_ aspectRatio: NSSize) {
     guard let window else { return }
-    if Preference.unlockWindowAspectRatio {
+    // With the agent panel shown, windowWillResize keeps the video area's aspect ratio.
+    if Preference.unlockWindowAspectRatio || agentPanel.isVisible {
       window.aspectRatio = .zero
       window.resizeIncrements = .init(width: 1, height: 1)
     } else {
@@ -2467,7 +2529,9 @@ class MainWindowController: PlayerWindowController {
     // When starting to play the file try and find the screen the window was previously on.
     let screen = player.info.justStartedFile ? determineScreenToUse(window) : window.selectDefaultScreen()
     let screenRect = screen.visibleFrame
-    let screenSize = screenRect.size
+    let panelWidth = agentPanel.visibleWidth
+    var screenSize = screenRect.size
+    screenSize.width -= panelWidth
 
     let (width, height) = player.videoSizeForDisplay
 
@@ -2479,7 +2543,9 @@ class MainWindowController: PlayerWindowController {
     var rect: NSRect
     let needResizeWindow: Bool
 
-    let frame = fsState.priorWindowedFrame ?? window.frame
+    // Frames below describe the video area; the agent panel is added back afterwards.
+    var frame = fsState.priorWindowedFrame ?? window.frame
+    frame.size.width = max(frame.width - panelWidth, AppData.mainWindowMinSize.width)
 
     if player.info.justStartedFile {
       // Many settings can require the window to be resized/repositioned:
@@ -2563,6 +2629,7 @@ class MainWindowController: PlayerWindowController {
     }
 
     shouldApplyInitialWindowSize = false
+    rect.size.width += panelWidth
 
     let rectBefore = rect
     rect = rect.constrain(in: screenRect)
@@ -2609,7 +2676,7 @@ class MainWindowController: PlayerWindowController {
   func updateWindowParametersForMPV(withFrame frame: NSRect? = nil) {
     guard let window else { return }
     if let videoWidth = player.info.videoWidth {
-      let windowScale = Double((frame ?? window.frame).width) / Double(videoWidth)
+      let windowScale = Double((frame ?? window.frame).width - agentPanel.visibleWidth) / Double(videoWidth)
       player.info.cachedWindowScale = windowScale
       player.mpv.setDouble(MPVOption.Window.windowScale, windowScale, level: .verbose)
     }
@@ -2631,6 +2698,7 @@ class MainWindowController: PlayerWindowController {
     let scalef = CGFloat(scale)
     finalSize.width *= scalef
     finalSize.height *= scalef
+    finalSize.width += agentPanel.visibleWidth
     // set size
     if finalSize.width > screenFrame.size.width || finalSize.height > screenFrame.size.height {
       // if final size is bigger than screen

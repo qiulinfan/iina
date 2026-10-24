@@ -350,6 +350,8 @@
 		E3A239AE2FC7267300CE6ACC /* SideBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A239AD2FC7267000CE6ACC /* SideBar.swift */; };
 		E3A239B12FCB4D0900CE6ACC /* SidebarPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A239B02FCB4D0300CE6ACC /* SidebarPane.swift */; };
 		E3A239C12FCB4D2400CE6ACC /* SidebarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3A239C02FCB4D2400CE6ACC /* SidebarController.swift */; };
+		6C5960240304B74DB6621FAE /* AgentPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D55DC2F79BCFCA2EEC9C02FD /* AgentPanel.swift */; };
+		0937D4B4EEE5554B347D2795 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6829D38D211C16D6310AF0BC /* AgentClient.swift */; };
 		E3AD62772FF4C9BE00D2CAC5 /* VerbatimStrings.strings in Resources */ = {isa = PBXBuildFile; fileRef = E3AD62762FF4C9BE00D2CAC5 /* VerbatimStrings.strings */; };
 		E3AD62792FF8C19A00D2CAC5 /* VolumeButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3AD62782FF8C19600D2CAC5 /* VolumeButton.swift */; };
 		E3B3DD5720FDB8A600325184 /* PreferenceWindowController.xib in Resources */ = {isa = PBXBuildFile; fileRef = E3B3DD5920FDB8A600325184 /* PreferenceWindowController.xib */; };
@@ -1709,6 +1711,8 @@
 		E3A239AD2FC7267000CE6ACC /* SideBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideBar.swift; sourceTree = "<group>"; };
 		E3A239B02FCB4D0300CE6ACC /* SidebarPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarPane.swift; sourceTree = "<group>"; };
 		E3A239C02FCB4D2400CE6ACC /* SidebarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarController.swift; sourceTree = "<group>"; };
+		D55DC2F79BCFCA2EEC9C02FD /* AgentPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPanel.swift; sourceTree = "<group>"; };
+		6829D38D211C16D6310AF0BC /* AgentClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentClient.swift; sourceTree = "<group>"; };
 		E3AD62762FF4C9BE00D2CAC5 /* VerbatimStrings.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = VerbatimStrings.strings; sourceTree = "<group>"; };
 		E3AD62782FF8C19600D2CAC5 /* VolumeButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeButton.swift; sourceTree = "<group>"; };
 		E3B3DD5820FDB8A600325184 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/PreferenceWindowController.xib; sourceTree = "<group>"; };
@@ -2546,6 +2550,8 @@
 				E3C228082FDF5EF8009A1A89 /* SidebarTrackSelector.swift */,
 				E3A239AD2FC7267000CE6ACC /* SideBar.swift */,
 				E3A239C02FCB4D2400CE6ACC /* SidebarController.swift */,
+				D55DC2F79BCFCA2EEC9C02FD /* AgentPanel.swift */,
+				6829D38D211C16D6310AF0BC /* AgentClient.swift */,
 				E3A239B02FCB4D0300CE6ACC /* SidebarPane.swift */,
 				E3D94E7F2FD0519600B08618 /* SidebarLayoutPane.swift */,
 				E3C228062FDF4E02009A1A89 /* SidebarVideoPane.swift */,
@@ -2964,6 +2970,8 @@
 				84C8D5911D796F9700D98A0E /* Aspect.swift in Sources */,
 				E3A239AE2FC7267300CE6ACC /* SideBar.swift in Sources */,
 				E3A239C12FCB4D2400CE6ACC /* SidebarController.swift in Sources */,
+				6C5960240304B74DB6621FAE /* AgentPanel.swift in Sources */,
+				0937D4B4EEE5554B347D2795 /* AgentClient.swift in Sources */,
 				E3383689202651CF00ABC812 /* PrefOSCToolbarDraggingItemViewController.swift in Sources */,
 				519872FF26879B9B00F84BCC /* AccessibilityPreferences.swift in Sources */,
 				34C4D19C2FC58482006B829F /* LiveTextSupport.swift in Sources */,

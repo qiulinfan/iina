@@ -18,6 +18,14 @@ extension MainWindowController {
     sidebars.show(tab: "chapters")
   }
 
+  @objc func menuAskAgent(_ sender: NSMenuItem) {
+    agentPanel.askAboutCurrentMoment()
+  }
+
+  @objc func menuToggleAgentPanel(_ sender: NSMenuItem) {
+    agentPanel.toggle()
+  }
+
   @objc func menuShowVideoQuickSettings(_ sender: NSMenuItem) {
     sidebars.show(tab: "video")
   }

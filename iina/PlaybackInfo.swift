@@ -180,6 +180,8 @@ class PlaybackInfo {
   var audioTracks: [MPVTrack] = []
   var videoTracks: [MPVTrack] = []
   @Atomic var subTracks: [MPVTrack] = []
+  /// Subtitle lines in the order they appeared, kept as context for the agent panel.
+  var recentSubtitles: [(time: Double, text: String)] = []
 
   var abLoopStatus: LoopStatus = .cleared
 

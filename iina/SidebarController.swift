@@ -126,8 +126,9 @@ class SidebarController: NSObject {
   // MARK: - Layout setup (called from windowDidLoad)
 
   func installSubviews(in contentView: NSView) {
-    contentView.addSubview(trailingSidebar.view)
-    contentView.addSubview(leadingSidebar.view)
+    // Below the agent panel, so the trailing sidebar slides out from under it.
+    contentView.addSubview(trailingSidebar.view, positioned: .below, relativeTo: mainWindow.agentPanel.view)
+    contentView.addSubview(leadingSidebar.view, positioned: .below, relativeTo: mainWindow.agentPanel.view)
     for panel in sideBars {
       panel.view.padding(.bottom(panel.visibleEdgeMargin), .top(panel.visibleEdgeMargin))
       panel.widthConstraint = panel.view.widthAnchor.constraint(equalToConstant: 60)
@@ -136,7 +137,7 @@ class SidebarController: NSObject {
       case .leading:
         panel.edgeConstraint = panel.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: -60)
       case .trailing:
-        panel.edgeConstraint = contentView.trailingAnchor.constraint(equalTo: panel.view.trailingAnchor, constant: -60)
+        panel.edgeConstraint = mainWindow.agentPanel.view.leadingAnchor.constraint(equalTo: panel.view.trailingAnchor, constant: -60)
       }
       panel.edgeConstraint.isActive = true
       panel.view.isHidden = true
@@ -268,6 +269,8 @@ class SidebarController: NSObject {
   }
 
   private func setTitlebarConstraint(for side: Side, _ constant: CGFloat, animated: Bool = true) {
+    // The trailing side also makes room for the agent panel.
+    let constant = side == .leading ? constant : constant + mainWindow.agentPanel.visibleWidth
     if side == .leading {
       mainWindow.titleBarView.setLeadingConstraint(constant, animated: animated)
       mainWindow.oscBottomView.setLeadingConstraint(constant, animated: animated)
@@ -275,6 +278,14 @@ class SidebarController: NSObject {
       mainWindow.titleBarView.setTrailingConstraint(constant, animated: animated)
       mainWindow.oscBottomView.setTrailingConstraint(constant, animated: animated)
     }
+  }
+
+  /// Re-apply the trailing title bar and control bar inset after the agent panel changed.
+  func refreshTrailingInset() {
+    let panel = trailingSidebar
+    let width = panel.status == .hidden ? 0 : titlebarConstantWhenShown(width: panel.widthConstraint.constant,
+                                                                      margin: panel.visibleEdgeMargin, side: .trailing)
+    setTitlebarConstraint(for: .trailing, width, animated: false)
   }
 
   private func replaceSideBar(with viewController: SidebarViewController, type: ViewType, in panel: Panel) {

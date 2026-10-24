@@ -157,7 +157,9 @@ class MPVController: NSObject {
     MPVProperty.videoParamsPrimaries: MPV_FORMAT_STRING,
     MPVProperty.videoParamsGamma: MPV_FORMAT_STRING,
     MPVProperty.idleActive: MPV_FORMAT_FLAG,
-    MPVProperty.currentAo: MPV_FORMAT_STRING
+    MPVProperty.currentAo: MPV_FORMAT_STRING,
+    MPVProperty.subText: MPV_FORMAT_STRING,
+    MPVProperty.secondarySubText: MPV_FORMAT_STRING
   ]
 
   /// Map from mpv codec name to core media video codec types.
@@ -1525,6 +1527,11 @@ class MPVController: NSObject {
 
     case MPVProperty.currentAo:
       DispatchQueue.main.async { self.player.currentAoChanged() }
+
+    case MPVProperty.subText, MPVProperty.secondarySubText:
+      guard let text = getString(name), !text.isEmpty else { break }
+      let time = getDouble(MPVProperty.timePos)
+      DispatchQueue.main.async { self.player.subtitleTextChanged(text, at: time) }
 
     default:
       // Utility.log("MPV property changed (unhandled): \(name)")

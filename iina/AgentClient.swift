@@ -52,10 +52,70 @@ class AgentClient {
     Logger.log(message, level: level, subsystem: AgentClient.subsystem)
   }
 
+  /// A stored session, labelled by its first question.
+  struct PastSession {
+    let id: String
+    let cwd: String
+    let question: String
+    let video: String?
+    let date: Date
+  }
+
+  /// The most recent sessions in `sessionDir` that hold a question, newest first. Read from the files,
+  /// so the list is ready before omp has started.
+  static func pastSessions(limit: Int = 30) -> [PastSession] {
+    let dir = URL(fileURLWithPath: sessionDir)
+    let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]))?
+      .filter { $0.pathExtension == "jsonl" && !$0.lastPathComponent.hasPrefix(".") } ?? []
+    let dated = files.map { file in
+      (file, (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+    }.sorted { $0.1 > $1.1 }
+    var sessions: [PastSession] = []
+    for (file, date) in dated where sessions.count < limit {
+      if let session = readPastSession(file, date: date) { sessions.append(session) }
+    }
+    return sessions
+  }
+
+  /// The session header and its first user message, which carries the panel's context block.
+  private static func readPastSession(_ file: URL, date: Date) -> PastSession? {
+    guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+    defer { try? handle.close() }
+    // The first question is near the top; tool output later in the file can be large.
+    guard let data = try? handle.read(upToCount: 512 * 1024) else { return nil }
+    // Lenient decoding: the cut may split a character, which only affects the last, incomplete line.
+    let text = String(decoding: data, as: UTF8.self)
+    var id: String?, cwd: String?
+    for line in text.split(separator: "\n") {
+      guard let entry = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? JSON else { continue }
+      if entry["type"] as? String == "session" {
+        id = entry["id"] as? String
+        cwd = entry["cwd"] as? String
+      }
+      guard entry["type"] as? String == "message", let message = entry["message"] as? JSON,
+            message["role"] as? String == "user", let id, let cwd else { continue }
+      let content = (message["content"] as? [JSON])?.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        ?? message["content"] as? String ?? ""
+      let (question, video) = splitContext(content)
+      return PastSession(id: id, cwd: cwd, question: question, video: video, date: date)
+    }
+    return nil
+  }
+
+  /// The question and video title of a prompt the panel built with its context block.
+  static func splitContext(_ prompt: String) -> (question: String, video: String?) {
+    guard let range = prompt.range(of: "\n\nQuestion: ") else { return (prompt, nil) }
+    let video = prompt.split(separator: "\n").first { $0.hasPrefix("Video: ") }.map {
+      String($0.dropFirst("Video: ".count).components(separatedBy: " — ")[0])
+    }
+    return (String(prompt[range.upperBound...]), video)
+  }
+
   // MARK: - Lifecycle
 
-  /// Launch omp, initialize the connection and open a new session rooted at `cwd`.
-  func start(cwd: String, completion: @escaping (Error?) -> Void) {
+  /// Launch omp, initialize the connection and open a session rooted at `cwd`: a new one, or the
+  /// stored session `resume`, whose history omp replays through `onUpdate` before this completes.
+  func start(cwd: String, resume: String? = nil, completion: @escaping (Error?) -> Void) {
     guard let executable = AgentClient.findExecutable() else {
       completion(AgentError(message: "omp not found in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin"))
       return
@@ -114,11 +174,14 @@ class AgentClient {
     request("initialize", initParams) { [weak self] result in
       guard let self else { return }
       if case .failure(let error) = result { completion(error); return }
-      self.request("session/new", ["cwd": cwd, "mcpServers": []]) { result in
+      var params: JSON = ["cwd": cwd, "mcpServers": []]
+      if let resume { params["sessionId"] = resume }
+      self.request(resume == nil ? "session/new" : "session/load", params) { result in
         switch result {
         case .success(let response):
-          self.sessionId = response["sessionId"] as? String
-          self.prompted = false
+          self.sessionId = resume ?? response["sessionId"] as? String
+          // A reopened session already holds a conversation, so it is never cleaned up as unused.
+          self.prompted = resume != nil
           if let options = response["configOptions"] as? [JSON] { self.onConfigOptions?(options) }
           completion(self.sessionId == nil ? AgentError(message: "omp returned no session id") : nil)
         case .failure(let error):

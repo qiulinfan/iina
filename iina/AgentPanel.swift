@@ -97,6 +97,8 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   private var currentReplyId: String?
   private var toolViews: [String: ToolCallView] = [:]
   private var thinkingView: NSView?
+  /// While omp replays a reopened session, its messages are shown at once rather than revealed.
+  private var isReplaying = false
   private var modelOptionId: String?
   private var thinkingOptionId: String?
 
@@ -116,6 +118,8 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     }
     view.header.newThreadButton.target = self
     view.header.newThreadButton.action = #selector(newThread)
+    view.header.historyButton.target = self
+    view.header.historyButton.action = #selector(showHistory(_:))
     view.header.hideButton.target = self
     view.header.hideButton.action = #selector(hidePanel)
 
@@ -333,16 +337,66 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     case .starting:
       whenReady.append(completion)
     case .idle:
-      clientState = .starting
-      whenReady.append(completion)
-      client.start(cwd: workingDirectory()) { [weak self] error in
-        guard let self else { return }
-        self.clientState = error == nil ? .ready : .idle
-        if error != nil { self.client.stop() }
-        let callbacks = self.whenReady
-        self.whenReady.removeAll()
-        callbacks.forEach { $0(error) }
+      start(cwd: workingDirectory(), resume: nil, completion: completion)
+    }
+  }
+
+  private func start(cwd: String, resume: String?, completion: @escaping (Error?) -> Void) {
+    clientState = .starting
+    whenReady.append(completion)
+    client.start(cwd: cwd, resume: resume) { [weak self] error in
+      guard let self else { return }
+      self.clientState = error == nil ? .ready : .idle
+      if error != nil { self.client.stop() }
+      let callbacks = self.whenReady
+      self.whenReady.removeAll()
+      callbacks.forEach { $0(error) }
+    }
+  }
+
+  // MARK: History
+
+  @objc private func showHistory(_ sender: NSButton) {
+    let menu = NSMenu()
+    let sessions = AgentClient.pastSessions()
+    if sessions.isEmpty {
+      menu.addItem(withTitle: "No past conversations", action: nil, keyEquivalent: "")
+    }
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateStyle = .medium
+    dateFormatter.timeStyle = .short
+    for session in sessions {
+      let item = NSMenuItem(title: session.question, action: #selector(openPastSession(_:)), keyEquivalent: "")
+      item.target = self
+      item.representedObject = session
+      let question = session.question.replacingOccurrences(of: "\n", with: " ")
+      let title = NSMutableAttributedString(string: question.count > 60 ? question.prefix(60) + "…" : question,
+                                            attributes: [.font: NSFont.menuFont(ofSize: 13)])
+      let detail = [session.video, dateFormatter.string(from: session.date)].compactMap { $0 }.joined(separator: " · ")
+      title.append(NSAttributedString(string: "\n" + detail, attributes: [.font: NSFont.menuFont(ofSize: 11),
+                                                                         .foregroundColor: NSColor.secondaryLabelColor]))
+      item.attributedTitle = title
+      menu.addItem(item)
+    }
+    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+  }
+
+  /// Replace the thread with a stored one: omp replays its history, then the conversation goes on.
+  @objc private func openPastSession(_ sender: NSMenuItem) {
+    guard let session = sender.representedObject as? AgentClient.PastSession else { return }
+    reset()
+    view.transcript.clear()
+    view.header.setThreadTitle(session.question.replacingOccurrences(of: "\n", with: " "))
+    isReplaying = true
+    let cwd = FileManager.default.fileExists(atPath: session.cwd) ? session.cwd : workingDirectory()
+    start(cwd: cwd, resume: session.id) { [weak self] error in
+      guard let self else { return }
+      isReplaying = false
+      currentReply = nil
+      if let error {
+        view.transcript.append(NoticeView(error.localizedDescription, color: Style.error))
       }
+      view.transcript.contentDidGrow(force: true)
     }
   }
 
@@ -367,7 +421,17 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
         currentReply = reply
         currentReplyId = messageId
       }
-      currentReply?.append(text)
+      if isReplaying {
+        currentReply?.appendAtOnce(text)
+      } else {
+        currentReply?.append(text)
+      }
+    case "user_message_chunk":
+      // Only sent while a reopened session is replayed; show the question without the context block.
+      guard let content = update["content"] as? AgentClient.JSON, let text = content["text"] as? String else { return }
+      view.transcript.append(UserMessageView(AgentClient.splitContext(text).question, moment: nil,
+                                             target: self, action: #selector(seekToMessageMoment(_:))))
+      currentReply = nil
     case "tool_call":
       guard let id = update["toolCallId"] as? String else { return }
       removeThinking()
@@ -596,6 +660,7 @@ fileprivate class ResizeHandleView: NSView {
 class AgentHeaderView: NSView {
   private let titleLabel = NSTextField(labelWithString: "OMP")
   private let threadLabel = NSTextField(labelWithString: "")
+  let historyButton = AgentHeaderView.iconButton("clock.arrow.circlepath", tooltip: "Past Conversations")
   let newThreadButton = AgentHeaderView.iconButton("plus", tooltip: "New Thread")
   let hideButton = AgentHeaderView.iconButton("sidebar.right", tooltip: "Hide Agent Panel")
 
@@ -608,7 +673,7 @@ class AgentHeaderView: NSView {
     threadLabel.lineBreakMode = .byTruncatingTail
     threadLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-    let stack = NSStackView(views: [titleLabel, threadLabel, NSView(), newThreadButton, hideButton])
+    let stack = NSStackView(views: [titleLabel, threadLabel, NSView(), historyButton, newThreadButton, hideButton])
     stack.orientation = .horizontal
     stack.spacing = 8
     stack.translatesAutoresizingMaskIntoConstraints = false
@@ -1059,6 +1124,13 @@ class AssistantMessageView: NSView, TextScaling {
     let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.revealMore() }
     RunLoop.main.add(timer, forMode: .common)
     revealTimer = timer
+  }
+
+  /// Show text at once, for history replayed from a stored session.
+  func appendAtOnce(_ text: String) {
+    shown += text
+    label.attributedStringValue = AssistantMessageView.render(shown)
+    onGrow?()
   }
 
   private func revealMore() {

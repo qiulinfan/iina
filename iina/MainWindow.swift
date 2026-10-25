@@ -25,6 +25,16 @@ class MainWindow: CommonWindow {
     }
   }
 
+  override func sendEvent(_ event: NSEvent) {
+    // Checked here rather than in mouseDown: buttons in the control bar and title bar handle their
+    // clicks themselves, so those never reach the window controller.
+    if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
+       let controller = windowController as? MainWindowController, controller.loaded {
+      controller.agentPanel.windowReceivedMouseDown(event)
+    }
+    super.sendEvent(event)
+  }
+
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     /// Menu items carry mpv's single-key bindings (`f`, `space`, ...) as key equivalents. While text
     /// is being typed, keys without Command or Control are text, not player commands.

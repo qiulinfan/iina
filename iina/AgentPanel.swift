@@ -205,6 +205,14 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     Preference.set(Int(width), for: .agentPanelWidth)
   }
 
+  /// A click anywhere outside the panel hands the keyboard back to the player, so the arrow keys and
+  /// space control playback again instead of moving the cursor in the composer.
+  func windowReceivedMouseDown(_ event: NSEvent) {
+    guard let window = view.window, window.firstResponder === view.composer.textView,
+          !view.bounds.contains(view.convert(event.locationInWindow, from: nil)) else { return }
+    window.makeFirstResponder(nil)
+  }
+
   @objc func hidePanel() {
     setVisible(false)
   }

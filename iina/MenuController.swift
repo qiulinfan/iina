@@ -278,9 +278,19 @@ class MenuController: NSObject, NSMenuDelegate {
       let agentPanel = NSMenuItem(title: "Show/Hide Agent Panel",
                                   action: #selector(MainWindowController.menuToggleAgentPanel(_:)), keyEquivalent: "a")
       agentPanel.keyEquivalentModifierMask = [.command, .option]
+      // ⌘0 already sets the window to half size in IINA's default key bindings.
+      let biggerText = NSMenuItem(title: "Bigger Agent Text",
+                                  action: #selector(MainWindowController.menuZoomAgentText(_:)), keyEquivalent: "=")
+      biggerText.tag = 1
+      let smallerText = NSMenuItem(title: "Smaller Agent Text",
+                                   action: #selector(MainWindowController.menuZoomAgentText(_:)), keyEquivalent: "-")
+      smallerText.tag = -1
+      let actualText = NSMenuItem(title: "Actual Agent Text Size",
+                                  action: #selector(MainWindowController.menuZoomAgentText(_:)), keyEquivalent: "")
       let index = menu.index(of: chapterPanel) + 1
-      menu.insertItem(agentPanel, at: index)
-      menu.insertItem(askAgent, at: index)
+      for item in [askAgent, agentPanel, biggerText, smallerText, actualText].reversed() {
+        menu.insertItem(item, at: index)
+      }
     }
 
     nextMedia.action = #selector(MainMenuActionHandler.menuNextMedia(_:))

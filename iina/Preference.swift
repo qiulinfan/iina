@@ -152,6 +152,7 @@ struct Preference {
     static let trailingSidebarWidth = Key("trailingSidebarWidth")
     static let agentPanelVisible = Key("agentPanelVisible")
     static let agentPanelWidth = Key("agentPanelWidth")
+    static let agentPanelTextScale = Key("agentPanelTextScale")
     static let prefetchPlaylistVideoDuration = Key("prefetchPlaylistVideoDuration")
 
     static let enableThumbnailPreview = Key("enableThumbnailPreview")
@@ -1079,6 +1080,7 @@ struct Preference {
     .trailingSidebarWidth: 360,
     .agentPanelVisible: true,
     .agentPanelWidth: 340,
+    .agentPanelTextScale: 1.0,
     .prefetchPlaylistVideoDuration: true,
     .themeMaterial: Theme.dark.rawValue,
     .useLiquidGlassOSD: true,

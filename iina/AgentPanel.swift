@@ -24,6 +24,14 @@ fileprivate enum Style {
   static let error = rgb(0xef7177)
   static let success = rgb(0xaad84c)
 
+  /// Scale of the conversation text, set with ⌘+ and ⌘−; the panel's chrome keeps its size.
+  static var textScale: CGFloat = 1
+
+  /// A font for conversation text, scaled by `textScale`.
+  static func text(_ size: CGFloat = 13, bold: Bool = false, italic: Bool = false) -> NSFont {
+    font(size * textScale, bold: bold, italic: italic)
+  }
+
   static func font(_ size: CGFloat = 13, bold: Bool = false, italic: Bool = false) -> NSFont {
     var font = NSFont(name: "JetBrainsMono Nerd Font Mono", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
     if bold { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
@@ -68,6 +76,8 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
   private(set) var isVisible = Preference.bool(for: .agentPanelVisible)
   private(set) var width = CGFloat(Preference.integer(for: .agentPanelWidth)).clamped(to: AgentPanelController.widthRange)
   static let widthRange: ClosedRange<CGFloat> = 260...720
+  static let textScaleRange: ClosedRange<CGFloat> = 0.7...2
+  static let textScaleDidChange = Notification.Name("IINAAgentPanelTextScaleDidChange")
 
   /// Width the panel takes away from the video area.
   var visibleWidth: CGFloat { isVisible ? width : 0 }
@@ -115,6 +125,10 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
     // Start omp as soon as there is something to ask about, so the model and thinking menus are
     // filled before the first question. Opening a session doesn't call the model.
     player.observe(.iinaFileLoaded) { [unowned self] _ in warmUp() }
+    Style.textScale = CGFloat(Preference.double(for: .agentPanelTextScale)).clamped(to: AgentPanelController.textScaleRange)
+    // The scale is shared, so every window's panel follows a change made in any of them.
+    _ = NotificationCenter.default.addObserver(forName: AgentPanelController.textScaleDidChange, object: nil,
+                                               queue: .main) { [weak self] _ in self?.applyTextScale() }
     _ = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
                                            queue: .main) { [weak self] _ in
       self?.client.stop()
@@ -144,6 +158,19 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
       view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
     ])
     view.isHidden = !isVisible
+    applyTextScale()
+  }
+
+  /// Scale the conversation text by `factor`, or back to its normal size when nil.
+  func zoomText(by factor: CGFloat?) {
+    Style.textScale = factor.map { (Style.textScale * $0).clamped(to: AgentPanelController.textScaleRange) } ?? 1
+    Preference.set(Double(Style.textScale), for: .agentPanelTextScale)
+    NotificationCenter.default.post(name: AgentPanelController.textScaleDidChange, object: nil)
+  }
+
+  private func applyTextScale() {
+    view.transcript.applyTextScale()
+    view.composer.applyTextScale()
   }
 
   func setVisible(_ visible: Bool) {
@@ -335,12 +362,12 @@ class AgentPanelController: NSObject, NSTextViewDelegate {
       let messageId = update["messageId"] as? String
       if currentReply == nil || (messageId != nil && messageId != currentReplyId) {
         let reply = AssistantMessageView()
+        reply.onGrow = { [weak self] in self?.view.transcript.contentDidGrow() }
         view.transcript.append(reply)
         currentReply = reply
         currentReplyId = messageId
       }
       currentReply?.append(text)
-      view.transcript.contentDidGrow()
     case "tool_call":
       guard let id = update["toolCallId"] as? String else { return }
       removeThinking()
@@ -636,7 +663,7 @@ class AgentHeaderView: NSView {
 
 class TranscriptView: NSScrollView {
   private let stack = NSStackView()
-  private let emptyLabel = NSTextField(wrappingLabelWithString:
+  private let emptyLabel = ScalingLabel(wrappingLabelWithString:
     "Ask about what you're watching.\n\n⌘⇧A focuses the box below and the video keeps playing. "
     + "A question is pinned to the moment you press Return: its position, the subtitles leading up to it "
     + "and the frame on screen.")
@@ -667,7 +694,7 @@ class TranscriptView: NSScrollView {
       stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
     ])
 
-    emptyLabel.font = Style.font(12)
+    emptyLabel.baseSize = 12
     emptyLabel.textColor = Style.muted
     add(emptyLabel)
   }
@@ -690,6 +717,17 @@ class TranscriptView: NSScrollView {
   func clear() {
     stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
     add(emptyLabel)
+  }
+
+  /// Re-apply fonts after the text scale changed: every scalable view, the empty label included.
+  func applyTextScale() {
+    func visit(_ view: NSView) {
+      (view as? TextScaling)?.applyTextScale()
+      view.subviews.forEach(visit)
+    }
+    visit(stack)
+    emptyLabel.applyTextScale()
+    contentDidGrow()
   }
 
   /// Follow the conversation unless the user scrolled up to read.
@@ -726,7 +764,8 @@ class ComposerView: NSView {
     layer?.borderWidth = 1
     layer?.borderColor = Style.border.cgColor
 
-    textView.font = Style.font(13)
+    textView.font = Style.text(13)
+    textView.placeholderFont = Style.text(13)
     textView.textColor = Style.text
     textView.insertionPointColor = Style.accent
     textView.drawsBackground = false
@@ -797,10 +836,16 @@ class ComposerView: NSView {
   }
 
   /// Grow with the text up to about eight lines.
+  func applyTextScale() {
+    textView.font = Style.text(13)
+    textView.placeholderFont = Style.text(13)
+    textDidChange()
+  }
+
   func textDidChange() {
     guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
     layoutManager.ensureLayout(for: container)
-    let lineHeight = layoutManager.defaultLineHeight(for: Style.font(13))
+    let lineHeight = layoutManager.defaultLineHeight(for: textView.font ?? Style.font(13))
     let used = layoutManager.usedRect(for: container).height
     textHeight.constant = max(lineHeight, used).clamped(to: lineHeight...(lineHeight * 8))
     textView.needsDisplay = true
@@ -833,6 +878,7 @@ class ComposerTextView: NSTextView {
   var onEscape: (() -> Void)?
   var onFocusChange: ((Bool) -> Void)?
   var placeholder = ""
+  var placeholderFont = Style.font(13)
 
   override func keyDown(with event: NSEvent) {
     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -868,13 +914,14 @@ class ComposerTextView: NSTextView {
     let padding = textContainer?.lineFragmentPadding ?? 0
     (placeholder as NSString).draw(
       at: NSPoint(x: textContainerOrigin.x + padding, y: textContainerOrigin.y),
-      withAttributes: [.font: Style.font(13), .foregroundColor: Style.placeholder])
+      withAttributes: [.font: placeholderFont, .foregroundColor: Style.placeholder])
   }
 }
 
 /// A playback position that seeks there when clicked.
-class MomentButton: NSButton {
+class MomentButton: NSButton, TextScaling {
   var position: Double = 0
+  private var label = ""
 
   init() {
     super.init(frame: .zero)
@@ -888,15 +935,35 @@ class MomentButton: NSButton {
   }
 
   func setLabel(_ text: String) {
-    attributedTitle = NSAttributedString(string: text, attributes: [.font: Style.font(12), .foregroundColor: Style.accent])
+    label = text
+    attributedTitle = NSAttributedString(string: text, attributes: [.font: Style.text(12), .foregroundColor: Style.accent])
+  }
+
+  func applyTextScale() {
+    setLabel(label)
   }
 }
 
 // MARK: - Transcript items
 
-fileprivate func wrappingLabel(_ text: String = "", color: NSColor = Style.text, size: CGFloat = 13) -> NSTextField {
-  let label = NSTextField(wrappingLabelWithString: text)
-  label.font = Style.font(size)
+/// Views whose fonts follow `Style.textScale`.
+protocol TextScaling {
+  func applyTextScale()
+}
+
+class ScalingLabel: NSTextField, TextScaling {
+  var baseSize: CGFloat = 13 {
+    didSet { applyTextScale() }
+  }
+
+  func applyTextScale() {
+    font = Style.text(baseSize)
+  }
+}
+
+fileprivate func wrappingLabel(_ text: String = "", color: NSColor = Style.text, size: CGFloat = 13) -> ScalingLabel {
+  let label = ScalingLabel(wrappingLabelWithString: text)
+  label.baseSize = size
   label.textColor = color
   label.isSelectable = true
   label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -958,9 +1025,15 @@ class UserMessageView: NSView {
 }
 
 /// Streams the agent's markdown reply.
-class AssistantMessageView: NSView {
+class AssistantMessageView: NSView, TextScaling {
   private let label = wrappingLabel()
-  private var markdown = ""
+  /// Text shown so far; characters received but not yet shown wait in `pending`.
+  private var shown = ""
+  private var pending: [Character] = []
+  private var pendingStart = 0
+  private var revealTimer: Timer?
+  /// Called as the shown text grows, so the transcript can follow it.
+  var onGrow: (() -> Void)?
 
   init() {
     super.init(frame: .zero)
@@ -979,9 +1052,43 @@ class AssistantMessageView: NSView {
     fatalError("init(coder:) has not been implemented")
   }
 
+  /// omp sends the reply in bursts; reveal it a few characters per frame instead, faster when more is waiting.
   func append(_ text: String) {
-    markdown += text
-    label.attributedStringValue = AssistantMessageView.render(markdown)
+    pending.append(contentsOf: text)
+    guard revealTimer == nil else { return }
+    let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.revealMore() }
+    RunLoop.main.add(timer, forMode: .common)
+    revealTimer = timer
+  }
+
+  private func revealMore() {
+    let backlog = pending.count - pendingStart
+    guard backlog > 0 else {
+      stopRevealing()
+      return
+    }
+    // About a tenth of the backlog per frame catches up within a fraction of a second.
+    let step = max(1, backlog / 10)
+    shown.append(contentsOf: pending[pendingStart..<pendingStart + step])
+    pendingStart += step
+    label.attributedStringValue = AssistantMessageView.render(shown)
+    onGrow?()
+  }
+
+  private func stopRevealing() {
+    revealTimer?.invalidate()
+    revealTimer = nil
+    pending.removeAll()
+    pendingStart = 0
+  }
+
+  override func viewWillMove(toSuperview newSuperview: NSView?) {
+    if newSuperview == nil { stopRevealing() }
+    super.viewWillMove(toSuperview: newSuperview)
+  }
+
+  func applyTextScale() {
+    label.attributedStringValue = AssistantMessageView.render(shown)
   }
 
   /// Inline markdown (bold, italic, code, links) with headings shown bold; block structure such as
@@ -1000,7 +1107,7 @@ class AssistantMessageView: NSView {
     let all = NSRange(location: 0, length: result.length)
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineSpacing = 3
-    result.addAttributes([.font: Style.font(13), .foregroundColor: Style.text, .paragraphStyle: paragraph], range: all)
+    result.addAttributes([.font: Style.text(13), .foregroundColor: Style.text, .paragraphStyle: paragraph], range: all)
     result.enumerateAttribute(.inlinePresentationIntent, in: all) { value, range, _ in
       guard let raw = (value as? NSNumber)?.uintValue else { return }
       let intent = InlinePresentationIntent(rawValue: raw)
@@ -1009,7 +1116,7 @@ class AssistantMessageView: NSView {
       } else {
         let bold = intent.contains(.stronglyEmphasized), italic = intent.contains(.emphasized)
         if bold || italic {
-          result.addAttribute(.font, value: Style.font(13, bold: bold, italic: italic), range: range)
+          result.addAttribute(.font, value: Style.text(13, bold: bold, italic: italic), range: range)
         }
       }
     }
@@ -1021,14 +1128,14 @@ class AssistantMessageView: NSView {
   }
 }
 
-class ToolCallView: NSView {
+class ToolCallView: NSView, TextScaling {
   private let label = NSTextField(labelWithString: "")
   private var title: String
+  private var status: String?
 
   init(title: String, status: String?) {
     self.title = title
     super.init(frame: .zero)
-    label.font = Style.font(12)
     label.lineBreakMode = .byTruncatingMiddle
     label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     label.translatesAutoresizingMaskIntoConstraints = false
@@ -1048,15 +1155,20 @@ class ToolCallView: NSView {
 
   func update(title: String?, status: String?) {
     if let title, !title.isEmpty { self.title = title }
-    let (mark, color): (String, NSColor) = switch status {
+    if let status { self.status = status }
+    let (mark, color): (String, NSColor) = switch self.status {
     case "completed": ("✓", Style.success)
     case "failed": ("✗", Style.error)
     default: ("○", Style.muted)
     }
-    let text = NSMutableAttributedString(string: mark + " ", attributes: [.font: Style.font(12), .foregroundColor: color])
-    text.append(NSAttributedString(string: self.title, attributes: [.font: Style.font(12), .foregroundColor: Style.muted]))
+    let text = NSMutableAttributedString(string: mark + " ", attributes: [.font: Style.text(12), .foregroundColor: color])
+    text.append(NSAttributedString(string: self.title, attributes: [.font: Style.text(12), .foregroundColor: Style.muted]))
     label.attributedStringValue = text
     label.toolTip = self.title
+  }
+
+  func applyTextScale() {
+    update(title: nil, status: nil)
   }
 }
 

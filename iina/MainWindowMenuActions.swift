@@ -26,6 +26,10 @@ extension MainWindowController {
     agentPanel.toggle()
   }
 
+  @objc func agentButtonAction() {
+    agentPanel.toggle()
+  }
+
   /// Tag 1 zooms in, -1 zooms out, 0 restores the normal size.
   @objc func menuZoomAgentText(_ sender: NSMenuItem) {
     agentPanel.zoomText(by: sender.tag == 0 ? nil : sender.tag > 0 ? 1.1 : 1 / 1.1)

@@ -42,6 +42,8 @@ class Titlebar: NSView {
 
   private var onTopButton: NSButton
   private var removeBlackBarButton: NSButton
+  /// Shows and hides the agent panel, so it doesn't take a menu to bring it back.
+  private var agentButton: NSButton
 
   private var container: NSStackView!
   private var titlebarContainer: NSView!
@@ -83,6 +85,12 @@ class Titlebar: NSView {
       action: #selector(MainWindowController.removeVideoViewBlackBars)
     )
 
+    self.agentButton = NSButton(
+      image: .sf("sidebar.right", withConfiguration: accessoryIconConfig)!,
+      target: mainWindow,
+      action: #selector(MainWindowController.agentButtonAction)
+    )
+
     super.init(frame: .zero)
 
     translatesAutoresizingMaskIntoConstraints = false
@@ -118,9 +126,19 @@ class Titlebar: NSView {
     removeBlackBarButton.isBordered = false
     updateRemoveBlackBarButton()
 
+    agentButton.size(height: 16)
+    agentButton.imageScaling = .scaleProportionallyDown
+    agentButton.translatesAutoresizingMaskIntoConstraints = false
+    agentButton.bezelStyle = .smallSquare
+    agentButton.isBordered = false
+    agentButton.toolTip = "Show/Hide Agent Panel (⌥⌘A)"
+
     if useSystemTitle {
       let titlebarAccessoryViewController = NSTitlebarAccessoryViewController()
-      titlebarAccessoryViewController.view = onTopButton
+      let accessories = NSStackView(views: [onTopButton, agentButton])
+      accessories.orientation = .horizontal
+      accessories.spacing = 8
+      titlebarAccessoryViewController.view = accessories
       titlebarAccessoryViewController.layoutAttribute = .right
       mainWindow.window!.addTitlebarAccessoryViewController(titlebarAccessoryViewController)
     } else {
@@ -188,7 +206,7 @@ class Titlebar: NSView {
       titleLeadingConstraint.priority = .defaultHigh
       titleLeadingConstraint.isActive = true
 
-      let accessoryView = NSStackView(views: [removeBlackBarButton, onTopButton])
+      let accessoryView = NSStackView(views: [removeBlackBarButton, onTopButton, agentButton])
       accessoryView.translatesAutoresizingMaskIntoConstraints = false
       accessoryView.orientation = .horizontal
       accessoryView.spacing = 8

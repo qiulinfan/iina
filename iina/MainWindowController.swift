@@ -1271,6 +1271,8 @@ class MainWindowController: PlayerWindowController {
     if obj == 0 {
       // main window
       isMouseInWindow = true
+      // Entering over the agent panel doesn't bring up the controls; only the video does.
+      guard !event.inAnyOf([agentPanel.view]) else { return }
       showUI()
       updateTimer()
     } else if obj == 1 {
@@ -1305,11 +1307,19 @@ class MainWindowController: PlayerWindowController {
     guard !interactiveMode.isActive else { return }
 
     refreshSeekTimeAndThumbnail(from: event)
+    // Only movement over the video counts. Over the agent panel the controls neither appear nor stay
+    // up: a countdown already running, or started on the way in, hides them as usual.
+    if event.inAnyOf([agentPanel.view]) {
+      if hideControlTimer == nil && animationState != .hidden {
+        updateTimer()
+      }
+      return
+    }
     if isMouseInWindow {
       showUI()
     }
     // check whether mouse is in osc
-    if event.inAnyOf([currentControlBar, titleBarView, agentPanel.view]) {
+    if event.inAnyOf([currentControlBar, titleBarView]) {
       destroyTimer()
     } else {
       updateTimer()
@@ -2109,6 +2119,10 @@ class MainWindowController: PlayerWindowController {
     // don't hide UI when dragging control bar
     if oscFloatingView.isDragging { return }
     hideUI()
+    // Keep the pointer while it rests on the agent panel, where the user may be reading a reply.
+    if let window, agentPanel.view.bounds.contains(agentPanel.view.convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+      return
+    }
     NSCursor.setHiddenUntilMouseMoves(true)
   }
 

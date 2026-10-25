@@ -376,7 +376,9 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
       input: normalizedKeyCode, event: .keyDown, player: player,
       arguments: keyEventArgs(event), handler: {
       if let kb = PlayerCore.keyBindings[normalizedKeyCode] {
-        self.handleKeyBinding(kb)
+        if !self.handleArrowSeekKeyDown(normalizedKeyCode, kb, isRepeat: event.isARepeat) {
+          self.handleKeyBinding(kb)
+        }
         return true
       }
       return false
@@ -388,7 +390,8 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   override func keyUp(with event: NSEvent) {
     let keyCode = KeyCodeHelper.mpvKeyCode(from: event)
     let normalizedKeyCode = KeyCodeHelper.normalizeMpv(keyCode)
-    
+    handleArrowSeekKeyUp(normalizedKeyCode)
+
     PluginInputManager.handle(
       input: normalizedKeyCode, event: .keyUp, player: player,
       arguments: keyEventArgs(event)
@@ -396,6 +399,70 @@ class PlayerWindowController: NSWindowController, NSWindowDelegate {
   }
   
   
+  // MARK: - Arrow-key seek and hold to fast-forward
+
+  /// A press of RIGHT shorter than this seeks; holding it longer plays at `fastForwardSpeed` until released.
+  private static let holdThreshold: TimeInterval = 0.3
+  private static let fastForwardSpeed = 3.0
+  private var heldSeekTimer: Timer?
+  private var speedBeforeFastForward: Double?
+
+  /// The seek amount when `key` is RIGHT or LEFT bound to `seek`.
+  private func arrowSeekAmount(_ key: String) -> Double? {
+    guard key == "RIGHT" || key == "LEFT", let binding = PlayerCore.keyBindings[key],
+          binding.action.first == MPVCommand.seek.rawValue else { return nil }
+    return binding.action.dropFirst().first.flatMap(Double.init)
+  }
+
+  /// Whether this key event is an arrow seek handled here. These keys are also the key equivalents of
+  /// the seek menu items, which would seek again on every key repeat, so the window sends them here first.
+  func handlesArrowSeek(_ event: NSEvent) -> Bool {
+    arrowSeekAmount(KeyCodeHelper.normalizeMpv(KeyCodeHelper.mpvKeyCode(from: event))) != nil
+  }
+
+  /// RIGHT and LEFT bound to `seek` seek once per press instead of on every key repeat. RIGHT seeks
+  /// on release when tapped and fast-forwards while held. Returns false for any other binding.
+  private func handleArrowSeekKeyDown(_ key: String, _ binding: KeyMapping, isRepeat: Bool) -> Bool {
+    guard let amount = arrowSeekAmount(key) else { return false }
+    if isRepeat { return true }
+    guard key == "RIGHT", amount > 0 else {
+      handleKeyBinding(binding)
+      return true
+    }
+    heldSeekTimer?.invalidate()
+    heldSeekTimer = Timer.scheduledTimer(withTimeInterval: Self.holdThreshold, repeats: false) { [weak self] _ in
+      guard let self else { return }
+      heldSeekTimer = nil
+      guard player.info.state.active else { return }
+      speedBeforeFastForward = player.info.playSpeed
+      player.setSpeed(Self.fastForwardSpeed)
+    }
+    return true
+  }
+
+  private func handleArrowSeekKeyUp(_ key: String) {
+    guard key == "RIGHT" else { return }
+    if heldSeekTimer != nil {
+      heldSeekTimer?.invalidate()
+      heldSeekTimer = nil
+      if let binding = PlayerCore.keyBindings[key] {
+        handleKeyBinding(binding)
+      }
+    } else {
+      endFastForward()
+    }
+  }
+
+  /// Restore the speed from before RIGHT was held. Also called when the window loses focus, since the
+  /// key-up then goes elsewhere.
+  func endFastForward() {
+    heldSeekTimer?.invalidate()
+    heldSeekTimer = nil
+    guard let speed = speedBeforeFastForward else { return }
+    speedBeforeFastForward = nil
+    player.setSpeed(speed)
+  }
+
   override func mouseDown(with event: NSEvent) {
     PluginInputManager.handle(
       input: PluginInputManager.Input.mouse, event: .mouseDown,

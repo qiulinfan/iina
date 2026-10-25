@@ -2048,6 +2048,7 @@ class MainWindowController: PlayerWindowController {
   }
 
   func windowDidResignKey(_ notification: Notification) {
+    endFastForward()
     // keyWindow is nil: The whole app is inactive
     // keyWindow is another MainWindow: Switched to another video window
     if NSApp.keyWindow == nil ||

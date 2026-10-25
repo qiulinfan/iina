@@ -50,6 +50,10 @@ class MainWindow: CommonWindow {
         break
       }
     }
+    if let controller = windowController as? PlayerWindowController, controller.handlesArrowSeek(event) {
+      controller.keyDown(with: event)
+      return true
+    }
     return super.performKeyEquivalent(with: event)
   }
 

@@ -20,8 +20,9 @@ class AgentClient {
 
   static let subsystem = Logger.makeSubsystem("agent")
 
-  /// Sessions started from IINA live apart from the CLI and Zed sessions.
-  static let sessionDir = NSHomeDirectory() + "/.omp/agent/sessions-iina"
+  /// omp's own session store, shared with the CLI, Zed and omp gui. IINA's sessions are the ones whose
+  /// header names IINA as the ACP client that started them.
+  static let sessionsRoot = NSHomeDirectory() + "/.omp/agent/sessions"
 
   /// `session/update` payloads other than config changes.
   var onUpdate: ((JSON) -> Void)?
@@ -61,12 +62,13 @@ class AgentClient {
     let date: Date
   }
 
-  /// The most recent sessions in `sessionDir` that hold a question, newest first. Read from the files,
-  /// so the list is ready before omp has started.
+  /// The most recent IINA sessions in `sessionsRoot` that hold a question, newest first. Read from the
+  /// files, so the list is ready before omp has started.
   static func pastSessions(limit: Int = 30) -> [PastSession] {
-    let dir = URL(fileURLWithPath: sessionDir)
-    let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]))?
-      .filter { $0.pathExtension == "jsonl" && !$0.lastPathComponent.hasPrefix(".") } ?? []
+    let root = URL(fileURLWithPath: sessionsRoot)
+    let found = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey],
+                                               options: [.skipsHiddenFiles])
+    let files = (found?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "jsonl" }
     let dated = files.map { file in
       (file, (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
     }.sorted { $0.1 > $1.1 }
@@ -89,6 +91,8 @@ class AgentClient {
     for line in text.split(separator: "\n") {
       guard let entry = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? JSON else { continue }
       if entry["type"] as? String == "session" {
+        // Sessions the CLI, Zed or omp gui started share the store; only IINA's are listed.
+        guard (entry["origin"] as? JSON)?["client"] as? String == "iina" else { return nil }
         id = entry["id"] as? String
         cwd = entry["cwd"] as? String
       }
@@ -120,11 +124,9 @@ class AgentClient {
       completion(AgentError(message: "omp not found in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin"))
       return
     }
-    try? FileManager.default.createDirectory(atPath: AgentClient.sessionDir, withIntermediateDirectories: true)
-
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = ["--session-dir", AgentClient.sessionDir, "acp"]
+    process.arguments = ["acp"]
     process.currentDirectoryURL = URL(fileURLWithPath: cwd)
     // Apps launched from the Dock get a minimal PATH; omp's tools need the usual user locations.
     var env = ProcessInfo.processInfo.environment
@@ -218,14 +220,18 @@ class AgentClient {
   }
 
   /// Remove the file of a session that never got a prompt, with the lock omp keeps beside it
-  /// (`<time>_<id>.jsonl` and `.<time>_<id>.jsonl.lock.os`). A file holding a message is kept.
+  /// (`<time>_<id>.jsonl` and `.<time>_<id>.jsonl.lock.os`), in whichever project folder of the store
+  /// omp put it. A file holding a message, or one another client started, is kept.
   private static func deleteUnusedSession(_ id: String) {
     let fileManager = FileManager.default
-    guard let names = try? fileManager.contentsOfDirectory(atPath: sessionDir) else { return }
-    let dir = URL(fileURLWithPath: sessionDir)
-    guard let file = names.first(where: { $0.hasSuffix("_\(id).jsonl") && !$0.hasPrefix(".") }),
-          let content = try? String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8),
+    let found = fileManager.enumerator(at: URL(fileURLWithPath: sessionsRoot), includingPropertiesForKeys: nil,
+                                       options: [.skipsHiddenFiles])
+    guard let path = (found?.allObjects as? [URL])?.first(where: { $0.lastPathComponent.hasSuffix("_\(id).jsonl") }),
+          let content = try? String(contentsOf: path, encoding: .utf8),
+          content.contains(#""origin":{"mode":"acp","client":"iina"}"#),
           !content.contains(#""type":"message""#) else { return }
+    let file = path.lastPathComponent
+    let dir = path.deletingLastPathComponent()
     for name in [file, ".\(file).lock.os"] {
       try? fileManager.removeItem(at: dir.appendingPathComponent(name))
     }
